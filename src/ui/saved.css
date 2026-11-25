@@ -1,0 +1,199 @@
+/* Shared by the popup Saved tab and the options Saved page: tag input, folder select, filters, post card, snackbar. */
+
+/* Tag input */
+.tag-input {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--target);
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  background: var(--bg);
+  cursor: text;
+}
+.tag-input:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.tag-input-field {
+  flex: 1;
+  min-width: 80px;
+  min-height: 28px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: 400 15px/1.33 var(--font);
+}
+.tag-input-field:focus {
+  outline: none;
+}
+.tag-input-field::placeholder {
+  color: var(--muted);
+}
+.chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  margin-right: -4px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.chip-remove:hover {
+  background: var(--accent-soft);
+}
+
+/* Folder select */
+.folder-creator {
+  margin-top: 8px;
+}
+.folder-creator .note-error {
+  margin-top: 8px;
+}
+
+/* Saved screen */
+.search-wrap {
+  position: relative;
+  color: var(--muted);
+}
+.search-wrap > svg {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.filters {
+  display: contents;
+}
+.filter-chips {
+  display: flex;
+  gap: 8px;
+  min-height: 42px;
+  padding: 2px 2px 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex-shrink: 0;
+}
+.filter-chips::-webkit-scrollbar {
+  display: none;
+}
+/* Right-edge fade while more chips are clipped; set from JS when the row overflows. */
+.filter-chips.fade-end {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+}
+.tag-filter {
+  display: flex;
+}
+.skeleton {
+  height: 112px;
+  flex-shrink: 0;
+}
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 40px 16px;
+  text-align: center;
+}
+.empty-state .btn {
+  margin-top: 8px;
+}
+.empty-state[role='alert'] h3 {
+  color: var(--danger);
+}
+
+/* Post card */
+.post-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.post-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.post-author {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.post-age,
+.post-url {
+  font-size: 14px;
+}
+.post-snippet {
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.post-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.post-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.post-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  margin: 4px 0 -4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.post-actions .btn {
+  padding: 0 6px;
+  gap: 3px;
+}
+.post-actions .open-link {
+  margin-right: auto;
+  margin-left: -6px;
+  color: var(--accent);
+}
+.post-actions .open-link:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+  text-decoration: none;
+}
+.danger-text:hover:not(:disabled) {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.post-editor .field-label:not(:first-child) {
+  margin-top: 10px;
+}
+
+/* Snackbar floats above the list */
+.snackbar-host {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 2;
+}
+.snackbar-host .snackbar[hidden] {
+  display: none;
+}

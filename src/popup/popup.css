@@ -1,0 +1,137 @@
+/* Popup layout. Tokens and components come from ../ui/theme.css. */
+
+html,
+body {
+  width: 380px;
+  overflow: hidden;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 420px;
+  max-height: 600px;
+  background: var(--bg);
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 8px 0 16px;
+  min-height: 52px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.wordmark {
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.2px;
+}
+.icon-btn {
+  padding: 0;
+  width: 40px;
+  height: 40px;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.screen {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 12px;
+  padding: 16px;
+}
+.save-screen {
+  overflow-y: auto;
+}
+.field {
+  display: block;
+}
+.row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* Save screen */
+.post-context {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.context-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.context-text .muted {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.saved-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: 13px;
+  font-weight: 700;
+}
+.hint-card {
+  padding: 20px 16px;
+  text-align: center;
+}
+.hint {
+  color: var(--muted);
+  font-size: 15px;
+}
+.note-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.note-error[hidden] {
+  display: none;
+}
+
+/* Saved screen (popup layout: the list scrolls inside the 600px window) */
+.saved-screen {
+  padding: 12px 16px 0;
+  gap: 8px;
+}
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+  padding: 2px 6px 16px 2px;
+  overflow-y: auto;
+}
+.icon-btn:hover:not(:disabled),
+.icon-btn:focus-visible {
+  color: var(--text);
+}

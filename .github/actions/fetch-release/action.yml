@@ -1,0 +1,231 @@
+name: Fetch and verify release files
+description: >-
+  Downloads the files produced by the Release workflow (from a GitHub Release by tag, or from a
+  workflow run by id), checks them against SHA256SUMS, and then proves where they came from. The
+  proof is MANDATORY and cannot be skipped. `attestation`: gh attestation verify of every file,
+  pinned to the exact release.yml identity, the release tag and its commit. `rebuild` (only when
+  the repository variable ATTESTATIONS is "off"): a fresh reproducible build of the tag must give
+  byte-identical zips. The rebuild executes the tag's own code, so it runs ONLY in a job that has
+  no environment and no secrets (rebuild_here = true); the job that holds secrets (rebuild_here
+  false) never runs tag code and instead requires its downloaded hashes to equal the hashes the
+  secret-free job verified (expected_hashes). Any failure fails the action. Uses the gh CLI that
+  is preinstalled on GitHub runners.
+
+inputs:
+  source:
+    description: 'release (GitHub Release by tag) or run (artifact of a Release workflow run)'
+    required: true
+  release_tag:
+    description: 'Tag such as v1.2.3 (source = release)'
+    required: false
+    default: ''
+  run_id:
+    description: 'Release workflow run id (source = run)'
+    required: false
+    default: ''
+  verify:
+    description: 'attestation (default) or rebuild'
+    required: false
+    default: attestation
+  attestations_off:
+    description: 'The value of the repository variable ATTESTATIONS; rebuild is refused unless it is "off"'
+    required: false
+    default: ''
+  rebuild_here:
+    description: 'true only in a job WITHOUT environment and secrets: run the rebuild in this job'
+    required: false
+    default: 'false'
+  expected_hashes:
+    description: 'name:sha256 list verified by an earlier secret-free job; the files here must equal it'
+    required: false
+    default: ''
+  token:
+    description: 'Token with contents: read, actions: read and attestations: read'
+    required: true
+
+outputs:
+  directory:
+    description: 'Directory holding the verified files'
+    value: ${{ steps.fetch.outputs.directory }}
+  version:
+    description: 'Version from release-manifest.json (strict semver, equal to the tag)'
+    value: ${{ steps.fetch.outputs.version }}
+  tag:
+    description: 'Release tag vX.Y.Z'
+    value: ${{ steps.fetch.outputs.tag }}
+  hashes:
+    description: 'Comma separated name:sha256 list of the verified zips'
+    value: ${{ steps.fetch.outputs.hashes }}
+
+runs:
+  using: composite
+  steps:
+    - id: fetch
+      shell: bash
+      env:
+        SOURCE: ${{ inputs.source }}
+        RELEASE_TAG: ${{ inputs.release_tag }}
+        RUN_ID: ${{ inputs.run_id }}
+        VERIFY: ${{ inputs.verify }}
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+        # Bash regexes (=~) are anchored on the whole value, so a value with a newline cannot pass.
+        semver='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+        tagre='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+        [[ "$VERIFY" == attestation || "$VERIFY" == rebuild ]] \
+          || { echo "::error::verify must be attestation or rebuild"; exit 1; }
+        dir="$RUNNER_TEMP/release-download"
+        rm -rf "$dir"
+        mkdir -p "$dir"
+        # The commit the release tag points at (used to pin the attestation and the run).
+        resolve_tag_sha() {
+          local sha
+          sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$1" --jq .sha)"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::cannot resolve tag $1 to a commit"; exit 1; }
+          printf '%s' "$sha"
+        }
+        case "$SOURCE" in
+          release)
+            [[ "$RELEASE_TAG" =~ $tagre ]] || { echo "::error::release_tag must look like v1.2.3"; exit 1; }
+            tag="$RELEASE_TAG"
+            source_sha="$(resolve_tag_sha "$tag")"
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$dir" \
+              --pattern '*.zip' --pattern SHA256SUMS --pattern release-manifest.json
+            ;;
+          run)
+            [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "::error::run_id must be a number"; exit 1; }
+            # Only a successful tag push of release.yml, built from this repository at the commit
+            # the tag points to, may be deployed.
+            # UNCONFIRMED: the REST field `path` may carry an "@ref" suffix; it is stripped.
+            run_info="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" \
+              --jq '[.path, .event, .head_branch, .conclusion, .head_sha, .head_repository.full_name] | @tsv')"
+            IFS=$'\t' read -r run_path run_event run_branch run_conclusion run_sha run_repo <<< "$run_info"
+            [[ "${run_path%%@*}" == ".github/workflows/release.yml" && "$run_event" == "push" \
+              && "$run_conclusion" == "success" && "$run_repo" == "$GITHUB_REPOSITORY" ]] \
+              || { echo "::error::run $RUN_ID is not a successful push run of release.yml in this repository"; exit 1; }
+            [[ "$run_branch" =~ $tagre ]] || { echo "::error::run $RUN_ID was not started by a release tag"; exit 1; }
+            tag="$run_branch"
+            source_sha="$(resolve_tag_sha "$tag")"
+            [[ "$run_sha" == "$source_sha" ]] \
+              || { echo "::error::run $RUN_ID built a different commit than tag $tag points to"; exit 1; }
+            gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name release-dist --dir "$dir"
+            ;;
+          *) echo "::error::source must be release or run"; exit 1 ;;
+        esac
+        cd "$dir"
+        # Every zip must be listed in SHA256SUMS and match it (and nothing else may be listed).
+        listed="$(awk '{print $2}' SHA256SUMS | sort)"
+        present="$(ls -1 ./*.zip | sed 's|^\./||' | sort)"
+        [ "$listed" = "$present" ] || { echo "::error::SHA256SUMS does not list exactly the zips"; exit 1; }
+        if command -v sha256sum >/dev/null 2>&1; then
+          sha256sum --check SHA256SUMS
+        else
+          shasum -a 256 -c SHA256SUMS
+        fi
+        # Everything below goes into $GITHUB_OUTPUT, so each value is validated first.
+        version="$(node -p "require('./release-manifest.json').version")"
+        [[ "$version" =~ $semver ]] || { echo "::error::release-manifest.json has no valid version"; exit 1; }
+        [[ "v$version" == "$tag" ]] \
+          || { echo "::error::release-manifest.json version does not match tag $tag"; exit 1; }
+        hashes="$(awk '{printf "%s%s:%s", sep, $2, $1; sep=","}' SHA256SUMS)"
+        [[ "$hashes" =~ ^[A-Za-z0-9._-]+:[0-9a-f]{64}(,[A-Za-z0-9._-]+:[0-9a-f]{64})*$ ]] \
+          || { echo "::error::unexpected SHA256SUMS content"; exit 1; }
+        {
+          echo "directory=$dir"
+          echo "version=$version"
+          echo "tag=$tag"
+          echo "hashes=$hashes"
+          echo "source_sha=$source_sha"
+        } >> "$GITHUB_OUTPUT"
+        echo "checksums ok for $(echo "$present" | wc -l | tr -d ' ') zip(s), version $version, tag $tag"
+
+    # The rebuild fallback is only allowed when the owner has switched attestations off.
+    - name: Check the rebuild policy
+      if: ${{ inputs.verify == 'rebuild' }}
+      shell: bash
+      env:
+        ATTESTATIONS_OFF: ${{ inputs.attestations_off }}
+      run: |
+        [[ "$ATTESTATIONS_OFF" == "off" ]] \
+          || { echo "::error::verify = rebuild is only allowed when the repository variable ATTESTATIONS is off"; exit 1; }
+
+    # Provenance, option 1. The exact certificate identity pins the signing workflow file AND the
+    # tag ref (independent of how a gh version parses --signer-workflow); the issuer is the GitHub
+    # Actions OIDC issuer; --source-ref/--source-digest pin the tag and its commit; hosted runners
+    # only. Flags: https://cli.github.com/manual/gh_attestation_verify (read; it says the signer
+    # path is validated with --signer-workflow OR --cert-identity and documents no combination of
+    # the two, so only --cert-identity is used). Every file that is trusted afterwards is verified.
+    - name: Verify provenance attestations
+      if: ${{ inputs.verify == 'attestation' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        DIR: ${{ steps.fetch.outputs.directory }}
+        TAG: ${{ steps.fetch.outputs.tag }}
+        SOURCE_SHA: ${{ steps.fetch.outputs.source_sha }}
+      run: |
+        set -euo pipefail
+        cd "$DIR"
+        for file in ./*.zip SHA256SUMS release-manifest.json; do
+          gh attestation verify "$file" \
+            --repo "$GITHUB_REPOSITORY" \
+            --cert-identity "https://github.com/$GITHUB_REPOSITORY/.github/workflows/release.yml@refs/tags/$TAG" \
+            --cert-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --source-ref "refs/tags/$TAG" \
+            --source-digest "$SOURCE_SHA" \
+            --deny-self-hosted-runners
+        done
+
+    # Rebuild mode in the job that holds secrets: no tag code runs here. The hashes must equal
+    # the ones a secret-free job verified by rebuilding.
+    - name: Compare with the hashes verified earlier
+      if: ${{ inputs.expected_hashes != '' || (inputs.verify == 'rebuild' && inputs.rebuild_here != 'true') }}
+      shell: bash
+      env:
+        HASHES: ${{ steps.fetch.outputs.hashes }}
+        EXPECTED: ${{ inputs.expected_hashes }}
+      run: |
+        [[ -n "$EXPECTED" && "$HASHES" == "$EXPECTED" ]] \
+          || { echo "::error::the downloaded files differ from the files verified by the earlier job"; exit 1; }
+
+    # Provenance, option 2 (secret-free job only): the tag is checked out with its history, must
+    # be an ancestor of origin/main and the commit the release was built from, is built with the
+    # Node version from its .nvmrc, and every zip must be byte-identical. UNCONFIRMED: output
+    # identity across operating systems and CPU architectures (this runs on ubuntu even for the
+    # Safari bundle, which is the same zip content built by release.yml on ubuntu).
+    - name: Check out the release tag for the rebuild
+      if: ${{ inputs.verify == 'rebuild' && inputs.rebuild_here == 'true' }}
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        ref: refs/tags/${{ steps.fetch.outputs.tag }}
+        path: rebuild-src
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Require the tag to be the released commit on main
+      if: ${{ inputs.verify == 'rebuild' && inputs.rebuild_here == 'true' }}
+      shell: bash
+      working-directory: rebuild-src
+      env:
+        SOURCE_SHA: ${{ steps.fetch.outputs.source_sha }}
+      run: |
+        set -euo pipefail
+        [[ "$(git rev-parse HEAD)" == "$SOURCE_SHA" ]] || { echo "::error::checked-out tag differs from the resolved commit"; exit 1; }
+        git merge-base --is-ancestor HEAD origin/main \
+          || { echo "::error::the release tag is not on main"; exit 1; }
+    - name: Set up the pinned Node version for the rebuild
+      if: ${{ inputs.verify == 'rebuild' && inputs.rebuild_here == 'true' }}
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version-file: rebuild-src/.nvmrc
+    - name: Rebuild and compare
+      if: ${{ inputs.verify == 'rebuild' && inputs.rebuild_here == 'true' }}
+      shell: bash
+      working-directory: rebuild-src
+      env:
+        DIR: ${{ steps.fetch.outputs.directory }}
+        TAG: ${{ steps.fetch.outputs.tag }}
+      run: |
+        set -euo pipefail
+        npm ci --ignore-scripts
+        node scripts/verify-rebuild.mjs --tag "$TAG" --dir "$DIR"

@@ -1,0 +1,142 @@
+# Chrome Web Store: upload a draft, then publish it as a SEPARATE manual run. Manual only, dry run by
+# default.
+#
+# Two jobs. `verify` has NO environment and NO secrets: it fetches the release files, proves where
+# they came from (attestation, or a reproducible rebuild when attestations are switched off) and
+# prints the API requests. `deploy` needs it, runs only with dry_run unticked, and is the only job
+# with the environment `chrome-web-store` (required reviewers; secrets CWS_CLIENT_ID,
+# CWS_CLIENT_SECRET, CWS_REFRESH_TOKEN, CWS_EXTENSION_ID, CWS_PUBLISHER_ID). The deploy job never
+# runs code from a release tag. Both jobs run from main only (the environment must also be
+# restricted to main, see docs/RELEASING.md). Every action except `status` needs a verified
+# release tag; `publish` additionally refuses unless the uploaded draft is that release's version.
+# The Chrome Web Store API cannot create an item: upload the first version in the Developer
+# Dashboard by hand, finish its listing and privacy tabs, then use this workflow for updates.
+name: Deploy to Chrome Web Store
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: verify the files and print the API requests, send nothing'
+        type: boolean
+        default: true
+      action:
+        description: 'upload = send the zip as a new draft; publish = submit the uploaded draft; status = read the item status'
+        type: choice
+        options: [upload, publish, status]
+        default: upload
+      source:
+        description: 'Where to take the release files from (upload and publish)'
+        type: choice
+        options: [release, run]
+        default: release
+      release_tag:
+        description: 'Tag of the GitHub Release (source = release), for example v1.2.3'
+        type: string
+        default: ''
+      run_id:
+        description: 'Release workflow run id (source = run)'
+        type: string
+        default: ''
+      verify:
+        description: 'How the files are proven: attestation, or rebuild (only when the variable ATTESTATIONS is off)'
+        type: choice
+        options: [attestation, rebuild]
+        default: attestation
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-chrome
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify and print the Chrome Web Store plan
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
+    outputs:
+      hashes: ${{ steps.release.outputs.hashes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Fetch and verify the release files
+        if: inputs.action != 'status'
+        id: release
+        uses: ./.github/actions/fetch-release
+        with:
+          source: ${{ inputs.source }}
+          release_tag: ${{ inputs.release_tag }}
+          run_id: ${{ inputs.run_id }}
+          verify: ${{ inputs.verify }}
+          attestations_off: ${{ vars.ATTESTATIONS }}
+          rebuild_here: 'true'
+          token: ${{ github.token }}
+      - name: Print the requests (nothing is sent, no secrets are available here)
+        env:
+          ACTION: ${{ inputs.action }}
+          DIR: ${{ steps.release.outputs.directory }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          args=("$ACTION" --dry-run)
+          if [ "$ACTION" = "upload" ]; then args+=(--zip "$DIR/xmark-manager-${VERSION}-chrome.zip"); fi
+          node scripts/release-chrome.mjs "${args[@]}"
+
+  deploy:
+    name: Chrome Web Store ${{ inputs.action }}
+    needs: verify
+    if: ${{ inputs.dry_run == false && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: chrome-web-store
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      # Verified again here: the files are never trusted across jobs, only their hashes are compared.
+      - name: Fetch and verify the release files
+        if: inputs.action != 'status'
+        id: release
+        uses: ./.github/actions/fetch-release
+        with:
+          source: ${{ inputs.source }}
+          release_tag: ${{ inputs.release_tag }}
+          run_id: ${{ inputs.run_id }}
+          verify: ${{ inputs.verify }}
+          attestations_off: ${{ vars.ATTESTATIONS }}
+          expected_hashes: ${{ needs.verify.outputs.hashes }}
+          token: ${{ github.token }}
+      - name: Run the Chrome Web Store step
+        env:
+          ACTION: ${{ inputs.action }}
+          DIR: ${{ steps.release.outputs.directory }}
+          VERSION: ${{ steps.release.outputs.version }}
+          CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+          CWS_EXTENSION_ID: ${{ secrets.CWS_EXTENSION_ID }}
+          CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
+        run: |
+          set -euo pipefail
+          args=("$ACTION")
+          if [ "$ACTION" = "upload" ]; then args+=(--zip "$DIR/xmark-manager-${VERSION}-chrome.zip"); fi
+          if [ "$ACTION" != "status" ]; then args+=(--expected-version "$VERSION"); fi
+          node scripts/release-chrome.mjs "${args[@]}"

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>xmark-manager (dev)</title>
+    <link rel="stylesheet" href="/ui/theme.css" />
+    <link rel="stylesheet" href="/ui/components.css" />
+    <link rel="stylesheet" href="/ui/saved.css" />
+    <link rel="stylesheet" href="/popup/popup.css" />
+    <style>
+      /* Dev only: center the 380px popup in a wider window. */
+      body {
+        margin: 0 auto;
+        border-inline: 1px solid #2f3336;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- Order matters: the mock defines globalThis.browser before the real popup.js runs. -->
+    <script type="module" src="/dev/mock-browser.js"></script>
+    <script type="module" src="/popup/popup.js"></script>
+  </body>
+</html>

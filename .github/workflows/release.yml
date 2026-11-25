@@ -1,0 +1,194 @@
+# Release pipeline: verify -> package -> attest -> draft GitHub Release.
+#
+# Triggers: a pushed tag vX.Y.Z, or a manual run. A manual run is ALWAYS a dry run: it verifies and
+# builds everything and uploads the artifacts to the run, but attests and publishes nothing (only a
+# tag push is attested, so only tag builds can be deployed). Protect the v* tags with a tag ruleset
+# (docs/RELEASING.md): whoever may create a tag can start an attested build and a draft release.
+# The GitHub Release is always created as a DRAFT; a human publishes it. Store uploads are separate
+# workflows (deploy-*.yml) that start from this workflow's output.
+#
+# All third-party actions are pinned to a commit SHA: the `verify` job runs the workflow tests with
+# REQUIRE_PINNED=1 and fails if any action is left unpinned.
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Must stay ticked: manual runs only rehearse. Publishing is done by pushing a tag.'
+        type: boolean
+        default: true
+      version:
+        description: 'Version to rehearse (X.Y.Z, no "v"). Empty = package.json version.'
+        type: string
+        default: ''
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      publish: ${{ steps.meta.outputs.publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci
+      - name: Decide version, tag and whether to publish
+        id: meta
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          # Bash regexes (=~) are anchored on the whole value, so a value with a newline cannot pass.
+          semver='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+          tagre='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+          publish=false
+          if [ "$EVENT" = "push" ]; then
+            [ "$REF_TYPE" = "tag" ] || { echo "::error::push trigger without a tag"; exit 1; }
+            [[ "$REF_NAME" =~ $tagre ]] || { echo "::error::tag is not vX.Y.Z"; exit 1; }
+            tag="$REF_NAME"
+            publish=true
+            # A release tag must point at a commit that is on main. fetch-depth: 0 above already
+            # fetched origin/main (no credentials are kept, so no extra `git fetch` here).
+            git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+              || { echo "::error::tag $tag is not on main"; exit 1; }
+          else
+            [ "$INPUT_DRY_RUN" != "false" ] \
+              || { echo "::error::manual runs are rehearsals only; publish by pushing a tag"; exit 1; }
+            version="${INPUT_VERSION:-$(node -p "require('./package.json').version")}"
+            [[ "$version" =~ $semver ]] || { echo "::error::version input is not X.Y.Z"; exit 1; }
+            tag="v$version"
+          fi
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag publish=$publish"
+      - name: Workflow invariants with every action pinned (REQUIRE_PINNED=1)
+        env:
+          REQUIRE_PINNED: '1'
+        run: node scripts/run-tests.mjs tests/workflows.test.js
+      - name: Version, tag, changelog and bundle checks
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: node scripts/release-dry-run.mjs --tag "$TAG" --check-only
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build:lint
+
+  package:
+    name: Package
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci
+      - name: Build all bundles, zips, SHA256SUMS and release-manifest.json
+        env:
+          TAG: ${{ needs.verify.outputs.tag }}
+        run: |
+          set -euo pipefail
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export SOURCE_DATE_EPOCH
+          node scripts/release-dry-run.mjs --tag "$TAG"
+          (cd dist/release && sha256sum --check SHA256SUMS)
+      - name: Upload the release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-dist
+          path: dist/release/
+          if-no-files-found: error
+          retention-days: 30
+
+  # Provenance for the three zips, SHA256SUMS and release-manifest.json (the deploy workflows
+  # verify all five). Only this job gets id-token and attestations write access, and it is skipped
+  # on a dry run. On a private repository this may be unavailable (see docs/RELEASING.md); the
+  # deploy workflows then use `verify = rebuild` instead.
+  attest:
+    name: Attest provenance
+    needs: [verify, package]
+    # Set the repository variable ATTESTATIONS to "off" only when attestations are unavailable
+    # (docs/RELEASING.md); deploys must then use `verify = rebuild`.
+    if: needs.verify.outputs.publish == 'true' && vars.ATTESTATIONS != 'off'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-dist
+          path: release
+      - name: Re-verify checksums before attesting
+        run: cd release && sha256sum --check SHA256SUMS
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            release/*.zip
+            release/SHA256SUMS
+            release/release-manifest.json
+          # Storage records are for container registry pushes; not needed here.
+          create-storage-record: false
+
+  github-release:
+    name: Draft GitHub Release
+    needs: [verify, package, attest]
+    if: >-
+      ${{ !cancelled() && needs.verify.outputs.publish == 'true'
+      && needs.package.result == 'success'
+      && (needs.attest.result == 'success' || needs.attest.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-dist
+          path: release
+      - name: Re-verify checksums
+        run: cd release && sha256sum --check SHA256SUMS
+      - name: Create the draft release (nothing is published until a human publishes it)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.verify.outputs.tag }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          args=(--repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "xmark-manager $VERSION" \
+            --notes-file release/RELEASE_NOTES.md)
+          case "$VERSION" in *-*) args+=(--prerelease);; esac
+          gh release create "$TAG" "${args[@]}" \
+            release/*.zip release/SHA256SUMS release/release-manifest.json

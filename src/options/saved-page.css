@@ -1,0 +1,103 @@
+/* Options > Saved: the library browser. Cards, chips and editors come from ../ui/saved.css. */
+
+.saved-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.saved-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+}
+.saved-head .search-wrap {
+  flex: 1 1 280px;
+  min-width: 200px;
+  max-width: 560px;
+}
+.saved-tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+.saved-count {
+  font-size: 14px;
+  white-space: nowrap;
+}
+.saved-sort {
+  width: auto;
+  min-width: 168px;
+}
+.bar-actions:empty {
+  display: none;
+}
+
+/* Filters wrap instead of scrolling: there is room on a page. */
+.saved-page .filters {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.saved-page .filter-chips {
+  flex-wrap: wrap;
+  min-height: 0;
+  padding: 0;
+  overflow: visible;
+}
+.tag-cloud {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.tag-label {
+  font-weight: 700;
+}
+.tag-more {
+  color: var(--accent);
+}
+
+/* The list: one column, two from 1000 px, three from 1500 px. */
+.list-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+@media (min-width: 1000px) {
+  .list-page {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1500px) {
+  .list-page {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+.list-page > .empty-state,
+.list-page > .show-more-wrap,
+.list-page > .post-editor {
+  grid-column: 1 / -1;
+}
+.list-page .post-card {
+  height: 100%;
+}
+.show-more-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 16px;
+  font-size: 14px;
+}
+
+/* A centered, bounded snackbar instead of a full-width bar. */
+.saved-page .snackbar-host {
+  left: 50%;
+  right: auto;
+  width: min(480px, calc(100vw - 24px));
+  transform: translateX(-50%);
+}

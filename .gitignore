@@ -1,0 +1,10 @@
+node_modules/
+dist/
+web-ext-artifacts/
+.DS_Store
+.local/
+.superpowers/
+*.log
+.env
+/safari/
+coverage/

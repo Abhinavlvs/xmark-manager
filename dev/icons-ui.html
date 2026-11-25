@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>xmark-manager UI icons (dev)</title>
+    <link rel="stylesheet" href="/ui/theme.css" />
+    <style>
+      body {
+        margin: 0;
+        padding: 16px;
+        background: var(--bg);
+        color: var(--text);
+      }
+      table {
+        border-collapse: collapse;
+      }
+      th,
+      td {
+        padding: 8px 16px;
+        text-align: left;
+        border-bottom: 1px solid var(--border);
+      }
+      td.muted {
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <h1>UI icons at 1x, 2x and 4x (24x24 grid, stroke 2)</h1>
+    <table id="grid"></table>
+    <script type="module">
+      import { createIcon, ICON_NAMES } from '/ui/icons.js';
+      const grid = document.getElementById('grid');
+      for (const name of ICON_NAMES) {
+        const tr = document.createElement('tr');
+        const th = document.createElement('th');
+        th.textContent = name;
+        tr.appendChild(th);
+        for (const size of [24, 48, 96]) {
+          const td = document.createElement('td');
+          td.appendChild(createIcon(document, name, { size }));
+          tr.appendChild(td);
+        }
+        const small = document.createElement('td');
+        small.className = 'muted';
+        small.appendChild(createIcon(document, name, { size: 14 }));
+        tr.appendChild(small);
+        grid.appendChild(tr);
+      }
+    </script>
+  </body>
+</html>

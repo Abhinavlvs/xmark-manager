@@ -1,0 +1,65 @@
+/* Privacy: snippet length control (theme tokens only) */
+.snippet-length {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.snippet-label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 700;
+}
+.snippet-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+}
+.snippet-range {
+  flex: 1 1 220px;
+  min-width: 0;
+  min-height: var(--target);
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.snippet-number {
+  flex: none;
+  width: 88px;
+}
+.snippet-number[aria-invalid='true'] {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 1px var(--danger);
+}
+.snippet-readout {
+  flex: none;
+  min-width: 108px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.snippet-invalid {
+  margin-top: 8px;
+}
+.snippet-help {
+  margin-top: 8px;
+  font-size: 14px;
+}
+.snippet-saved {
+  min-height: 20px;
+  margin-top: 8px;
+  color: var(--success);
+  font-size: 14px;
+  font-weight: 600;
+}
+.snippet-saved:empty {
+  margin-top: 0;
+}
+.snippet-length.is-off .snippet-label,
+.snippet-length.is-off .snippet-readout {
+  color: var(--muted);
+}
+.snippet-length.is-off .snippet-range,
+.snippet-length.is-off .snippet-number {
+  cursor: not-allowed;
+  opacity: 0.5;
+}

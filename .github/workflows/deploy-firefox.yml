@@ -1,0 +1,141 @@
+# Upload the released Firefox zip to addons.mozilla.org (AMO). Manual only, dry run by default.
+#
+# Two jobs. `verify` has NO environment and NO secrets: it fetches the release files, proves where
+# they came from (attestation, or a reproducible rebuild when attestations are switched off) and
+# prints what would be sent. `deploy` needs it, runs only with dry_run unticked, and is the only job
+# with the environment `amo` (required reviewers; secrets AMO_JWT_ISSUER, AMO_JWT_SECRET). The
+# deploy job never runs code from a release tag: with `verify = rebuild` it only checks that its
+# downloaded files have the hashes the secret-free job verified.
+# Both jobs run from main only (the environment must also be restricted to main, see
+# docs/RELEASING.md). There is no way to skip the verification.
+name: Deploy to Firefox (AMO)
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: verify the files and print the AMO requests, send nothing'
+        type: boolean
+        default: true
+      source:
+        description: 'Where to take the release files from'
+        type: choice
+        options: [release, run]
+        default: release
+      release_tag:
+        description: 'Tag of the GitHub Release (source = release), for example v1.2.3'
+        type: string
+        default: ''
+      run_id:
+        description: 'Release workflow run id (source = run)'
+        type: string
+        default: ''
+      verify:
+        description: 'How the files are proven: attestation, or rebuild (only when the variable ATTESTATIONS is off)'
+        type: choice
+        options: [attestation, rebuild]
+        default: attestation
+      channel:
+        description: 'AMO channel. UNCONFIRMED: listed needs a metadata file for the first version.'
+        type: choice
+        options: [listed, unlisted]
+        default: listed
+      metadata_file:
+        description: 'Relative path of the AMO metadata JSON in the repository (first listed submission only)'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-amo
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify and print the AMO plan
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
+    outputs:
+      hashes: ${{ steps.release.outputs.hashes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Fetch and verify the release files
+        id: release
+        uses: ./.github/actions/fetch-release
+        with:
+          source: ${{ inputs.source }}
+          release_tag: ${{ inputs.release_tag }}
+          run_id: ${{ inputs.run_id }}
+          verify: ${{ inputs.verify }}
+          attestations_off: ${{ vars.ATTESTATIONS }}
+          rebuild_here: 'true'
+          token: ${{ github.token }}
+      - name: Print the AMO plan (nothing is sent, no secrets are available here)
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          METADATA_FILE: ${{ inputs.metadata_file }}
+          DIR: ${{ steps.release.outputs.directory }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          args=(--zip "$DIR/xmark-manager-${VERSION}-firefox.zip" --channel "$CHANNEL" \
+            --expected-version "$VERSION" --dry-run)
+          if [ -n "$METADATA_FILE" ]; then args+=(--metadata "$METADATA_FILE"); fi
+          node scripts/release-firefox.mjs "${args[@]}"
+
+  deploy:
+    name: AMO upload
+    needs: verify
+    if: ${{ inputs.dry_run == false && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: amo
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      # Verified again here: the files are never trusted across jobs, only their hashes are compared.
+      - name: Fetch and verify the release files
+        id: release
+        uses: ./.github/actions/fetch-release
+        with:
+          source: ${{ inputs.source }}
+          release_tag: ${{ inputs.release_tag }}
+          run_id: ${{ inputs.run_id }}
+          verify: ${{ inputs.verify }}
+          attestations_off: ${{ vars.ATTESTATIONS }}
+          expected_hashes: ${{ needs.verify.outputs.hashes }}
+          token: ${{ github.token }}
+      - name: Upload to AMO
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          METADATA_FILE: ${{ inputs.metadata_file }}
+          DIR: ${{ steps.release.outputs.directory }}
+          VERSION: ${{ steps.release.outputs.version }}
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          set -euo pipefail
+          args=(--zip "$DIR/xmark-manager-${VERSION}-firefox.zip" --channel "$CHANNEL" \
+            --expected-version "$VERSION")
+          if [ -n "$METADATA_FILE" ]; then args+=(--metadata "$METADATA_FILE"); fi
+          node scripts/release-firefox.mjs "${args[@]}"

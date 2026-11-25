@@ -1,0 +1,9 @@
+node_modules/
+dist/
+web-ext-artifacts/
+package-lock.json
+.local/
+.superpowers/
+claude-sessions.yaml
+.claude/
+/safari/

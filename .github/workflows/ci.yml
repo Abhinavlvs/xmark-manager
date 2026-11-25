@@ -1,0 +1,244 @@
+# Continuous integration. Runs on pull requests and on pushes to main only (a push to a PR branch
+# does not run twice). Every third-party action is pinned by commit SHA (Dependabot keeps the pins
+# current, see docs/RELEASING.md, "Pinning actions"); the test step fails on any unpinned action.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      e2e:
+        description: 'Also run the real-browser end-to-end job (Firefox and Chromium)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Decides whether the heavy jobs are needed. Docs-only changes still run `lint` (prettier covers
+  # Markdown) but skip build, tests, audit and packaging. Anything uncertain counts as code.
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          code=true
+          if [ -n "$BASE_SHA" ] && [ "$BASE_SHA" != "0000000000000000000000000000000000000000" ] \
+            && git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+            if [ -n "$changed" ] && ! printf '%s\n' "$changed" \
+              | grep -qvE '^(docs/|\.github/ISSUE_TEMPLATE/|\.github/pull_request_template\.md$|\.github/CODEOWNERS$|LICENSE$|.*\.md$)'; then
+              code=false
+            fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "code changed: $code"
+
+  lint:
+    name: Lint and format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.x
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+
+  verify:
+    name: Test and build (Node ${{ matrix.node }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20.x', '22.x']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - name: Unit tests (includes the manifest checks and the workflow invariants)
+        if: matrix.node != '22.x'
+        env:
+          REQUIRE_PINNED: '1'
+        run: npm test
+      # The same tests with coverage of src/ (needs Node 22). Fails below 80% lines, 70% functions
+      # or 60% branches, so coverage cannot silently drop.
+      - name: Unit tests with coverage (includes the manifest checks and the workflow invariants)
+        if: matrix.node == '22.x'
+        env:
+          REQUIRE_PINNED: '1'
+        run: |
+          set -o pipefail
+          mkdir -p coverage
+          npm run coverage | tee coverage/report.txt
+          {
+            echo '### Test coverage of src/'
+            echo '```'
+            sed -n '/start of coverage report/,/end of coverage report/p' coverage/report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the coverage report
+        if: matrix.node == '22.x'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage
+          path: coverage/lcov.info
+          if-no-files-found: error
+          retention-days: 14
+      - name: Build all bundles (firefox, chrome, safari)
+        run: npm run build
+      - name: web-ext lint of dist/firefox
+        run: npm run build:lint
+      - name: Package the three zips
+        run: npm run package
+      - name: Upload the zips
+        if: matrix.node == '22.x'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: xmark-manager-zips
+          path: dist/zips/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  # Zero runtime dependencies: this must pass trivially, and fails if one is ever added with a
+  # known high-severity advisory.
+  audit-runtime:
+    name: npm audit (runtime dependencies)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.x
+      - run: npm audit --omit=dev --audit-level=high
+
+  # Development tooling only (never shipped). Reports, never blocks.
+  audit-dev:
+    name: npm audit (dev dependencies, informational)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.x
+      - name: Audit all dependencies and summarise
+        run: |
+          set +e
+          npm audit --audit-level=high 2>&1 | tee audit.txt
+          status=${PIPESTATUS[0]}
+          {
+            echo '### npm audit (dev dependencies, informational)'
+            echo
+            echo '```'
+            cat audit.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+  # Manual only: needs a real Firefox and Chromium and takes minutes. Start it from the Actions
+  # tab ("Run workflow", tick "e2e"). Commands are documented in docs/RELEASING.md.
+  e2e:
+    name: Real-browser end-to-end (manual)
+    if: github.event_name == 'workflow_dispatch' && inputs.e2e
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Version of the geckodriver release downloaded below (tested locally with 0.37.1).
+      GECKODRIVER_VERSION: '0.37.1'
+      # TODO(owner): set the repository variable GECKODRIVER_SHA256 to the sha256 of
+      # geckodriver-v<version>-linux64.tar.gz (shown next to the asset on
+      # https://github.com/mozilla/geckodriver/releases). The job refuses to run without it.
+      GECKODRIVER_SHA256: ${{ vars.GECKODRIVER_SHA256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.x
+          cache: npm
+      - run: npm ci
+      - name: Install geckodriver from the official release and verify its checksum
+        run: |
+          set -euo pipefail
+          test -n "$GECKODRIVER_SHA256" || { echo "::error::repository variable GECKODRIVER_SHA256 is not set"; exit 1; }
+          asset="geckodriver-v${GECKODRIVER_VERSION}-linux64.tar.gz"
+          mkdir -p "$RUNNER_TEMP/gecko"
+          curl --fail --silent --show-error --location \
+            --output "$RUNNER_TEMP/gecko/$asset" \
+            "https://github.com/mozilla/geckodriver/releases/download/v${GECKODRIVER_VERSION}/${asset}"
+          echo "${GECKODRIVER_SHA256}  $RUNNER_TEMP/gecko/$asset" | sha256sum --check -
+          tar -xzf "$RUNNER_TEMP/gecko/$asset" -C "$RUNNER_TEMP/gecko"
+          echo "GECKODRIVER_BIN=$RUNNER_TEMP/gecko/geckodriver" >> "$GITHUB_ENV"
+      - name: Locate Firefox (preinstalled on ubuntu-latest, UNCONFIRMED for future images)
+        run: |
+          set -euo pipefail
+          firefox --version
+          echo "FIREFOX_BIN=$(command -v firefox)" >> "$GITHUB_ENV"
+      - name: Firefox smoke test
+        run: npm run e2e:firefox
+      - name: Firefox persistence test
+        run: npm run e2e:persistence
+      - name: Install Chrome for Testing (stable)
+        run: |
+          set -euo pipefail
+          json="$(curl --fail --silent --show-error https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json)"
+          url="$(printf '%s' "$json" | node -e "const j=JSON.parse(require('fs').readFileSync(0,'utf8'));console.log(j.channels.Stable.downloads.chrome.find(d=>d.platform==='linux64').url)")"
+          case "$url" in https://storage.googleapis.com/chrome-for-testing-public/*) ;; *) echo "::error::unexpected download host"; exit 1;; esac
+          mkdir -p "$RUNNER_TEMP/cft"
+          curl --fail --silent --show-error --location --output "$RUNNER_TEMP/cft/chrome.zip" "$url"
+          unzip -q "$RUNNER_TEMP/cft/chrome.zip" -d "$RUNNER_TEMP/cft"
+          echo "CHROME_BIN=$RUNNER_TEMP/cft/chrome-linux64/chrome" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/cft/chrome-linux64/chrome" --version
+      - name: Chrome end-to-end
+        # Runs `npm run e2e:chrome` when that script exists in package.json, so this workflow works
+        # both before and after the Chrome e2e script is merged.
+        run: |
+          if npm run | grep -q 'e2e:chrome'; then
+            npm run e2e:chrome
+          else
+            echo "::notice::npm script e2e:chrome is not present in this checkout; skipping"
+          fi

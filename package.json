@@ -1,0 +1,50 @@
+{
+  "name": "xmark-manager",
+  "version": "0.1.0",
+  "description": "Cross-browser (Firefox, Chrome, Safari) extension that saves X posts into folders you control.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node scripts/run-tests.mjs",
+    "coverage": "node scripts/run-tests.mjs --coverage",
+    "lint": "eslint . && prettier --check .",
+    "format": "prettier --write .",
+    "build": "node scripts/build.mjs all",
+    "build:firefox": "node scripts/build.mjs firefox",
+    "build:chrome": "node scripts/build.mjs chrome",
+    "build:safari": "node scripts/build.mjs safari",
+    "safari:convert": "node scripts/safari/convert.mjs",
+    "safari:build": "node scripts/safari/build.mjs",
+    "build:lint": "node scripts/build.mjs firefox && web-ext lint -s dist/firefox",
+    "run": "web-ext run -s src",
+    "package": "node scripts/package.mjs",
+    "release:dry-run": "node scripts/release-dry-run.mjs --dry-run",
+    "release:chrome": "node scripts/release-chrome.mjs",
+    "release:firefox": "node scripts/release-firefox.mjs",
+    "dev": "node scripts/dev-server.js",
+    "e2e:firefox": "node scripts/e2e/firefox-smoke.mjs",
+    "e2e:persistence": "node scripts/e2e/persistence.mjs",
+    "e2e:chrome": "node --experimental-websocket scripts/e2e/chromium-smoke.mjs",
+    "e2e:chrome:persistence": "node --experimental-websocket scripts/e2e/chromium-persistence.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.15.0",
+    "globals": "^17.14.0",
+    "linkedom": "^0.18.15",
+    "prettier": "^3.10.1",
+    "web-ext": "^10.8.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Abhinavlvs/xmark-manager.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Abhinavlvs/xmark-manager/issues"
+  },
+  "homepage": "https://github.com/Abhinavlvs/xmark-manager#readme"
+}
